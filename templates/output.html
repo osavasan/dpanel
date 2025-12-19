@@ -1,0 +1,14 @@
+{{template "header_insession" .}}
+{{define "title"}}DPanel{{end}}
+<div class="row">
+    <div class="col-12">
+        <h2>Dashboard</h2>
+        <div class="card">
+            <div class="card-body">
+                <h5>{{.Command}}</h5>
+                <pre style="white-space: pre-wrap;">{{.Output}}</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{{template "footer_insession" .}}

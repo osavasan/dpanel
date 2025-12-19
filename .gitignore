@@ -1,0 +1,39 @@
+# Binaries
+/dpanel
+/bin/
+
+# Build output
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go vendor
+/vendor/
+
+# Dependency directories
+node_modules/
+
+# SQLite / DB files
+*.db
+*.sqlite
+app.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Test coverage
+coverage.out
+
+# Temporary files
+/tmp/
