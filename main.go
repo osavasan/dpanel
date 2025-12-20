@@ -45,6 +45,9 @@ func main() {
 	mux.HandleFunc("/dashboard", requireAuth(dashboardHandler))
 	mux.HandleFunc("/topn", requireAuth(topnHandler))
 	mux.HandleFunc("/dockerstats", requireAuth(dockerstatsHandler))
+	// container inspect page and API
+	mux.HandleFunc("/container", requireAuth(containerPageHandler))
+	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
 	mux.HandleFunc("/users", requireAuth(usersHandler))
 	mux.HandleFunc("/users/create", requireAuth(createUserHandler))
 	mux.HandleFunc("/login", loginHandler)
@@ -279,6 +282,34 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Println("error:", err)
 	}
+}
+
+// container page: shows UI and will fetch inspect data via JS
+func containerPageHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+	data := map[string]any{"title": "Container Inspect", "ID": id}
+	templates.ExecuteTemplate(w, "container.html", data)
+}
+
+// API: run `docker inspect <id>` and return JSON
+func inspectAPIHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	out, err := exec.Command("docker", "inspect", id).CombinedOutput()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, fmt.Sprintf("error running docker inspect: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(out)
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,57 @@
+{{template "header_insession" .}}
+<div class="row">
+    <div class="col-12">
+        <h2>Container Inspect: {{.ID}}</h2>
+        <div class="card">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>Key values</h5>
+                        <div id="kvlist" class="mb-3"></div>
+                    </div>
+                    <div class="col-md-6">
+                        <h5>Raw JSON</h5>
+                        <pre id="raw" class="bg-light p-2" style="max-height:60vh;overflow:auto;"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mt-3">
+            <a href="/dockerstats" class="btn btn-secondary">Back to Docker Stats</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    (async function () {
+        const id = "{{.ID}}";
+        const kv = document.getElementById('kvlist');
+        const raw = document.getElementById('raw');
+        try {
+            const res = await fetch('/api/inspect?id=' + encodeURIComponent(id));
+            if (!res.ok) {
+                raw.textContent = 'Error: ' + res.status + ' ' + await res.text();
+                return;
+            }
+            const data = await res.json();
+            // docker inspect returns an array; take first element
+            const obj = Array.isArray(data) && data.length > 0 ? data[0] : data;
+            raw.textContent = JSON.stringify(obj, null, 2);
+            // show some top-level fields in key/value form
+            const keys = ['Id', 'Name', 'Image', 'State', 'Config', 'Mounts', 'NetworkSettings'];
+            keys.forEach(k => {
+                if (obj[k] !== undefined) {
+                    const val = (typeof obj[k] === 'object') ? JSON.stringify(obj[k], null, 2) : String(obj[k]);
+                    const wrap = document.createElement('div');
+                    wrap.className = 'mb-2';
+                    wrap.innerHTML = `<label class="form-label"><strong>${k}</strong></label><textarea class="form-control" rows="3" readonly>${val}</textarea>`;
+                    kv.appendChild(wrap);
+                }
+            });
+        } catch (e) {
+            raw.textContent = 'Error: ' + e.message;
+        }
+    })();
+</script>
+
+{{template "footer_insession" .}}

@@ -22,13 +22,13 @@
                     <tbody>
                         {{range .list}}
                         <tr>
-                            <td>{{.Container}}</td>
+                            <td><a href="/container?id={{.Container}}">{{.Container}}</a></td>
                             <td>{{.Name}}</td>
                             <td class="text-end">{{.CPU}}</td>
-                            <td class="text-end" >{{.MemUsage}}</td>
+                            <td class="text-end">{{.MemUsage}}</td>
                             <td>{{.MemPerc}}</td>
-                            <td class="text-end" >{{.NetIO}}</td>
-                            <td class="text-end" >{{.BlockIO}}</td>
+                            <td class="text-end">{{.NetIO}}</td>
+                            <td class="text-end">{{.BlockIO}}</td>
                             <td class="text-end">{{.PIDs}}</td>
                         </tr>
                         {{end}}
