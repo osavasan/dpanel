@@ -161,10 +161,9 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // ---------------- handlers ----------------
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	data := map[string]any{"title": "Login", "Error": nil}
 	if r.Method == http.MethodGet {
-		log.Println("login invoked")
-
-		templates.ExecuteTemplate(w, "login.html", nil)
+		templates.ExecuteTemplate(w, "login.html", data)
 		return
 	}
 	// POST
@@ -194,7 +193,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 			return
 		}
-		templates.ExecuteTemplate(w, "login.html", map[string]string{"Error": "invalid admin password"})
+		data["Error"] = fmt.Sprintf("invalid admin password.")
+		templates.ExecuteTemplate(w, "login.html", data)
 		return
 	}
 
@@ -225,9 +225,8 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		df = fmt.Sprintf("error running df: %v\n%s", err, df)
 	}
-	log.Println("dashboard invoked")
-
-	templates.ExecuteTemplate(w, "dashboard.html", map[string]string{"DF": df})
+	data := map[string]any{"title": "Dashboard", "DF": df}
+	templates.ExecuteTemplate(w, "dashboard.html", data)
 }
 
 func topnHandler(w http.ResponseWriter, r *http.Request) {
@@ -236,20 +235,14 @@ func topnHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		top = fmt.Sprintf("error running top: %v\n%s", err, top)
 	}
-	log.Println("topn invoked")
-
-	templates.ExecuteTemplate(w, "output.html", map[string]string{"Command": "top -b -n 1", "Output": top})
+	data := map[string]any{"title": "TopN", "Command": "top -b -n 1", "Output": top}
+	err = templates.ExecuteTemplate(w, "output.html", data)
+	if err != nil {
+		fmt.Println("error:", err)
+	}
 }
 
 func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
-	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
-	out, err := exec.Command("docker", "stats", "--no-stream", "--format", format).CombinedOutput()
-	if err != nil {
-		fmt.Println("error:", err)
-		templates.ExecuteTemplate(w, "dockerstats.html", map[string]string{"Error": fmt.Sprintf("error running docker stats: %v\n%s", err, string(out))})
-		return
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	type DS struct {
 		Container string
 		Name      string
@@ -261,6 +254,16 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 		PIDs      string
 	}
 	var stats []DS
+	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
+	out, err := exec.Command("docker", "stats", "--no-stream", "--format", format).CombinedOutput()
+	data := map[string]any{"title": "Docker Stats", "Command": "docker stats --no-stream --format '" + format + "'", "Output": string(out), "Error": nil, "list": stats}
+	if err != nil {
+		fmt.Println("error:", err)
+		data["Error"] = fmt.Sprintf("error running docker stats: %v\n%s", err, string(out))
+		templates.ExecuteTemplate(w, "dockerstats.html", data)
+		return
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	for _, ln := range lines {
 		if strings.TrimSpace(ln) == "" {
 			continue
@@ -271,7 +274,11 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		stats = append(stats, DS{Container: parts[0], Name: parts[1], CPU: parts[2], MemUsage: parts[3], MemPerc: parts[4], NetIO: parts[5], BlockIO: parts[6], PIDs: parts[7]})
 	}
-	templates.ExecuteTemplate(w, "dockerstats.html", stats)
+	data["list"] = stats
+	err = templates.ExecuteTemplate(w, "dockerstats.html", data)
+	if err != nil {
+		fmt.Println("error:", err)
+	}
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +298,8 @@ func usersHandler(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&u.ID, &u.Username, &u.Created)
 		list = append(list, u)
 	}
-	templates.ExecuteTemplate(w, "users.html", list)
+	data := map[string]any{"title": "Users", "list": list}
+	templates.ExecuteTemplate(w, "users.html", data)
 }
 
 func createUserHandler(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@
     <div class="col-12">
         <h2>Docker Stats</h2>
         {{if .Error}}<div class="alert alert-danger">Error:{{.Error}}</div>{{end}}
+        {{if eq .list nil}}<div class="alert alert-danger">There is no active containers</div>{{end}}
         <div class="card">
             <div class="card-body">
                 <table id="dockerStats" class="table table-striped table-bordered" style="width:100%">
@@ -19,20 +20,16 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{range .}}
+                        {{range .list}}
                         <tr>
                             <td>{{.Container}}</td>
                             <td>{{.Name}}</td>
-                            <td>{{.CPU}}</td>
-                            <td>{{.MemUsage}}</td>
+                            <td class="text-end">{{.CPU}}</td>
+                            <td class="text-end" >{{.MemUsage}}</td>
                             <td>{{.MemPerc}}</td>
-                            <td>{{.NetIO}}</td>
-                            <td>{{.BlockIO}}</td>
-                            <td>{{.PIDs}}</td>
-                        </tr>
-                        {{else}}
-                        <tr>
-                            <td colspan="8">No containers</td>
+                            <td class="text-end" >{{.NetIO}}</td>
+                            <td class="text-end" >{{.BlockIO}}</td>
+                            <td class="text-end">{{.PIDs}}</td>
                         </tr>
                         {{end}}
                     </tbody>
