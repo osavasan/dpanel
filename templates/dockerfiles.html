@@ -1,0 +1,44 @@
+{{template "header_insession" .}}
+<div class="row">
+    <div class="col-md-8">
+        <h3>Docker Files</h3>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Path</th>
+                    <th>Created</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .list}}
+                <tr>
+                    <td>{{.ID}}</td>
+                    <td>{{.Path}}</td>
+                    <td>{{.Created}}</td>
+                    <td>
+                        <form action="/dockerfiles/delete" method="post" style="display:inline">
+                            <input type="hidden" name="id" value="{{.ID}}" />
+                            <button class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="4">No records</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-4">
+        <h3>Add Docker File</h3>
+        <form action="/dockerfiles/add" method="post">
+            <div class="mb-3"><label class="form-label">Path</label><input name="path" class="form-control" />
+            </div>
+            <button class="btn btn-success">Add</button>
+        </form>
+    </div>
+</div>
+{{template "footer_insession" .}}

@@ -1,6 +1,7 @@
 # Binaries
 /dpanel
 /bin/
+run.sh
 
 # Build output
 *.exe

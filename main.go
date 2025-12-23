@@ -45,6 +45,9 @@ func main() {
 	mux.HandleFunc("/dashboard", requireAuth(dashboardHandler))
 	mux.HandleFunc("/topn", requireAuth(topnHandler))
 	mux.HandleFunc("/dockerstats", requireAuth(dockerstatsHandler))
+	mux.HandleFunc("/dockerfiles", requireAuth(dockerfilesHandler))
+	mux.HandleFunc("/dockerfiles/add", requireAuth(addDockerfileHandler))
+	mux.HandleFunc("/dockerfiles/delete", requireAuth(deleteDockerfileHandler))
 	// container inspect page and API
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
 	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
@@ -81,13 +84,19 @@ func main() {
 
 func initDB() error {
 	_, err := db.Exec(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            created_at DATETIME
-        );
-    `)
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL UNIQUE,
+			password TEXT NOT NULL,
+			created_at DATETIME
+		);
+
+		CREATE TABLE IF NOT EXISTS docker_files (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			path TEXT NOT NULL UNIQUE,
+			created_at DATETIME
+		);
+	`)
 	return err
 }
 
@@ -355,4 +364,81 @@ func createUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/users", http.StatusSeeOther)
+}
+
+// ---------------- docker files handlers ----------------
+func dockerfilesHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT id, path, created_at FROM docker_files ORDER BY id DESC")
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	type DF struct {
+		ID      int
+		Path    string
+		Created string
+	}
+	var list []DF
+	for rows.Next() {
+		var d DF
+		rows.Scan(&d.ID, &d.Path, &d.Created)
+		list = append(list, d)
+	}
+	data := map[string]any{"title": "Docker Files", "list": list}
+	templates.ExecuteTemplate(w, "dockerfiles.html", data)
+}
+
+func addDockerfileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+		return
+	}
+	path := strings.TrimSpace(r.FormValue("path"))
+	if path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	// check file exists
+	fi, err := os.Stat(path)
+	if err != nil || fi.IsDir() {
+		http.Error(w, "file does not exist at given path", http.StatusBadRequest)
+		return
+	}
+	// avoid duplicates
+	var count int
+	_ = db.QueryRow("SELECT COUNT(1) FROM docker_files WHERE path = ?", path).Scan(&count)
+	if count > 0 {
+		http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+		return
+	}
+	_, err = db.Exec("INSERT INTO docker_files (path, created_at) VALUES (?, datetime('now'))", path)
+	if err != nil {
+		http.Error(w, "failed to add record: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+}
+
+func deleteDockerfileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+		return
+	}
+	idStr := r.FormValue("id")
+	if idStr == "" {
+		http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+		return
+	}
+	_, err = db.Exec("DELETE FROM docker_files WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, "failed to delete: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
 }
