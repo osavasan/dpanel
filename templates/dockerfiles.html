@@ -22,6 +22,7 @@
                             <input type="hidden" name="id" value="{{.ID}}" />
                             <button class="btn btn-sm btn-danger">Delete</button>
                         </form>
+                        <button class="btn btn-sm btn-primary btn-edit-dockerfile" data-path="{{.Path}}">Edit</button>
                     </td>
                 </tr>
                 {{else}}
@@ -41,4 +42,28 @@
         </form>
     </div>
 </div>
+<!-- YAML Editor Modal -->
+<div class="modal fade" id="yamlEditModal" tabindex="-1" aria-labelledby="yamlEditModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="yamlEditModalLabel">Edit YAML File</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2"><strong id="yamlFilePath"></strong></div>
+                <textarea id="yamlEditor" class="form-control" rows="20" style="font-family: monospace;"></textarea>
+                <div id="yamlEditorAlert" class="mt-2 text-danger" style="display:none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" id="yamlSaveBtn" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- js-yaml for client-side validation -->
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+
 {{template "footer_insession" .}}

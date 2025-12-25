@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
+	yaml "gopkg.in/yaml.v3"
 )
 
 var db *sql.DB
@@ -48,6 +50,8 @@ func main() {
 	mux.HandleFunc("/dockerfiles", requireAuth(dockerfilesHandler))
 	mux.HandleFunc("/dockerfiles/add", requireAuth(addDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/delete", requireAuth(deleteDockerfileHandler))
+	mux.HandleFunc("/dockerfiles/file", requireAuth(getDockerfileHandler))
+	mux.HandleFunc("/dockerfiles/save", requireAuth(saveDockerfileHandler))
 	// container inspect page and API
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
 	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
@@ -441,4 +445,51 @@ func deleteDockerfileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/dockerfiles", http.StatusSeeOther)
+}
+
+// return file content as JSON {path, content}
+func getDockerfileHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "failed to read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": path, "content": string(b)})
+}
+
+// save file after validating YAML
+func saveDockerfileHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	var v any
+	if err := yaml.Unmarshal([]byte(req.Content), &v); err != nil {
+		http.Error(w, "yaml validation error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {
+		http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
