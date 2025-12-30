@@ -54,6 +54,7 @@ func main() {
 	mux.HandleFunc("/dockerfiles/save", requireAuth(saveDockerfileHandler))
 	// container inspect page and API
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
+	mux.HandleFunc("/containerlogs", requireAuth(containerLogsHandler))
 	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
 	mux.HandleFunc("/users", requireAuth(usersHandler))
 	mux.HandleFunc("/users/create", requireAuth(createUserHandler))
@@ -323,6 +324,21 @@ func inspectAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(out)
+}
+
+// container logs page: run `docker logs <id>` and render using output template
+func containerLogsHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing container id", http.StatusBadRequest)
+		return
+	}
+	out, err := exec.Command("docker", "logs", "--tail", "200", id).CombinedOutput()
+	data := map[string]any{"title": "Container Logs", "Command": "docker logs --tail 200 " + id, "Output": string(out)}
+	if err != nil {
+		data["Output"] = fmt.Sprintf("error running docker logs: %v\n%s", err, string(out))
+	}
+	templates.ExecuteTemplate(w, "output.html", data)
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
