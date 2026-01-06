@@ -13,9 +13,13 @@ It's designed to be:
 
 Built with **Go**, **SQLite**, **Bootstrap**, and **jQuery**.
 
-* * * * *
+
+![dpanel_stats](https://github.com/user-attachments/assets/cde23af3-fbcc-4569-a065-8488d2419fdd)
+
 
 Features
+
+
 --------
 
 -   View and manage Docker Compose services
