@@ -1,8 +1,12 @@
 $(document).ready(function () {
-    if (window.location.pathname === "/dockerstats") {
-        $('#dockerStats').DataTable({
-            "order": [[2, "desc"]]
-        });
+    // Docker Stats page
+    if (window.location.pathname.startsWith("/dockerstats")) {
+        if ($('#dockerStats').length) {
+            $('#dockerStats').DataTable({
+                "order": [[2, "desc"]]
+            });
+        }
+
         // stop container handler
         $(document).on('click', '.btn-stop', function (e) {
             e.preventDefault();
@@ -23,35 +27,46 @@ $(document).ready(function () {
             });
         });
     }
+
     // Dockerfiles editor handlers
-    if (window.location.pathname === "/dockerfiles") {
+    if (window.location.pathname.startsWith("/dockerfiles")) {
         // open modal and load file
         $(document).on('click', '.btn-edit-dockerfile', function (e) {
+            e.preventDefault();
             var path = $(this).data('path');
+            if (!path) return;
+
             $('#yamlFilePath').text(path);
             $('#yamlEditorAlert').hide().text('');
             fetch('/dockerfiles/file?path=' + encodeURIComponent(path)).then(function (res) {
-                if (!res.ok) throw new Error('failed to load file');
+                if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'failed to load file'); });
                 return res.json();
             }).then(function (data) {
                 $('#yamlEditor').val(data.content);
-                var modal = new bootstrap.Modal(document.getElementById('yamlEditModal'));
+                var modalEl = document.getElementById('yamlEditModal');
+                var modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
                 modal.show();
             }).catch(function (err) {
                 alert('Error loading file: ' + err.message);
             });
         });
 
-        // save handler with client-side YAML validation
-        $('#yamlSaveBtn').on('click', function () {
+        // save handler
+        $(document).on('click', '#yamlSaveBtn', function (e) {
+            e.preventDefault();
             var path = $('#yamlFilePath').text();
             var content = $('#yamlEditor').val();
-            try {
-                jsyaml.load(content);
-            } catch (e) {
-                $('#yamlEditorAlert').show().text('YAML validation error: ' + e.message);
-                return;
+
+            // client-side YAML validation if jsyaml is available
+            if (window.jsyaml) {
+                try {
+                    jsyaml.load(content);
+                } catch (e) {
+                    $('#yamlEditorAlert').show().text('YAML validation error: ' + e.message);
+                    return;
+                }
             }
+
             fetch('/dockerfiles/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -69,19 +84,27 @@ $(document).ready(function () {
             });
         });
     }
+
     // Nginx configs editor handlers
-    if (window.location.pathname === "/nginxconfigs") {
+    if (window.location.pathname.startsWith("/nginxconfigs")) {
         // open modal and load file
         $(document).on('click', '.btn-view-nginx', function (e) {
+            e.preventDefault();
             var path = $(this).data('path');
+            if (!path) return;
+
             $('#nginxFilePath').text(path);
             $('#nginxEditorAlert').hide().text('');
+
             fetch('/nginxconfigs/file?path=' + encodeURIComponent(path)).then(function (res) {
-                if (!res.ok) throw new Error('failed to load file');
+                if (!res.ok) {
+                    return res.text().then(function (t) { throw new Error(t || 'failed to load file'); });
+                }
                 return res.json();
             }).then(function (data) {
                 $('#nginxEditor').val(data.content);
-                var modal = new bootstrap.Modal(document.getElementById('nginxEditModal'));
+                var modalEl = document.getElementById('nginxEditModal');
+                var modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
                 modal.show();
             }).catch(function (err) {
                 alert('Error loading file: ' + err.message);
@@ -89,7 +112,8 @@ $(document).ready(function () {
         });
 
         // save handler
-        $('#nginxSaveBtn').on('click', function () {
+        $(document).on('click', '#nginxSaveBtn', function (e) {
+            e.preventDefault();
             var path = $('#nginxFilePath').text();
             var content = $('#nginxEditor').val();
             fetch('/nginxconfigs/save', {
@@ -97,7 +121,9 @@ $(document).ready(function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ path: path, content: content })
             }).then(function (res) {
-                if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'save failed'); });
+                if (!res.ok) {
+                    return res.text().then(function (t) { throw new Error(t || 'save failed'); });
+                }
                 return res.json();
             }).then(function (data) {
                 var modalEl = document.getElementById('nginxEditModal');
