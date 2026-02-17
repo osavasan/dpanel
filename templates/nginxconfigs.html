@@ -1,0 +1,54 @@
+{{template "header_insession" .}}
+<div class="row">
+    <div class="col-md-12">
+        <h3>Nginx Configurations</h3>
+        <p class="text-muted">Files from /etc/nginx/sites-enabled</p>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>File Name</th>
+                    <th>Path</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .list}}
+                <tr>
+                    <td>{{.Name}}</td>
+                    <td><code>{{.Path}}</code></td>
+                    <td>
+                        <button class="btn btn-sm btn-primary btn-view-nginx" data-path="{{.Path}}">View/Edit</button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="3">No nginx configuration files found</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Nginx Config Editor Modal -->
+<div class="modal fade" id="nginxEditModal" tabindex="-1" aria-labelledby="nginxEditModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="nginxEditModalLabel">View/Edit Nginx Configuration</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2"><strong id="nginxFilePath"></strong></div>
+                <textarea id="nginxEditor" class="form-control" rows="20" style="font-family: monospace;"></textarea>
+                <div id="nginxEditorAlert" class="mt-2 text-danger" style="display:none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" id="nginxSaveBtn" class="btn btn-primary">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{template "footer_insession" .}}

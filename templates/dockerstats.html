@@ -17,6 +17,7 @@
                             <th>Block I/O</th>
                             <th>PIDs</th>
                             <th>Logs</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -31,6 +32,10 @@
                             <td class="text-end">{{.PIDs}}</td>
                             <td class="text-center">
                                 <a href="/containerlogs?id={{.Container}}" class="btn btn-sm btn-primary">View Log</a>
+                            </td>
+                            <td class="text-center">
+                                <button type="button" class="btn btn-sm btn-danger btn-stop"
+                                    data-id="{{.Container}}">Stop</button>
                             </td>
                         </tr>
                         {{end}}

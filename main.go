@@ -47,11 +47,16 @@ func main() {
 	mux.HandleFunc("/dashboard", requireAuth(dashboardHandler))
 	mux.HandleFunc("/topn", requireAuth(topnHandler))
 	mux.HandleFunc("/dockerstats", requireAuth(dockerstatsHandler))
+	mux.HandleFunc("/docker/stop", requireAuth(stopContainerHandler))
 	mux.HandleFunc("/dockerfiles", requireAuth(dockerfilesHandler))
 	mux.HandleFunc("/dockerfiles/add", requireAuth(addDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/delete", requireAuth(deleteDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/file", requireAuth(getDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/save", requireAuth(saveDockerfileHandler))
+	// nginx configs
+	mux.HandleFunc("/nginxconfigs", requireAuth(nginxConfigsHandler))
+	mux.HandleFunc("/nginxconfigs/file", requireAuth(getNginxConfigHandler))
+	mux.HandleFunc("/nginxconfigs/save", requireAuth(saveNginxConfigHandler))
 	// container inspect page and API
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
 	mux.HandleFunc("/containerlogs", requireAuth(containerLogsHandler))
@@ -341,6 +346,35 @@ func containerLogsHandler(w http.ResponseWriter, r *http.Request) {
 	templates.ExecuteTemplate(w, "output.html", data)
 }
 
+// stop a running container by id
+func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var id string
+	// prefer form value
+	id = r.FormValue("id")
+	if id == "" {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		id = req.ID
+	}
+	out, err := exec.Command("docker", "stop", id).CombinedOutput()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, fmt.Sprintf("error stopping container: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
+}
+
 func usersHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.Query("SELECT id, username, created_at FROM users ORDER BY id DESC")
 	if err != nil {
@@ -500,6 +534,83 @@ func saveDockerfileHandler(w http.ResponseWriter, r *http.Request) {
 	var v any
 	if err := yaml.Unmarshal([]byte(req.Content), &v); err != nil {
 		http.Error(w, "yaml validation error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {
+		http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// ---------------- nginx configs handlers ----------------
+func nginxConfigsHandler(w http.ResponseWriter, r *http.Request) {
+	dir := "/etc/nginx/sites-enabled"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		http.Error(w, "failed to read nginx directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type NginxFile struct {
+		Name string
+		Path string
+	}
+	var list []NginxFile
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			list = append(list, NginxFile{
+				Name: entry.Name(),
+				Path: dir + "/" + entry.Name(),
+			})
+		}
+	}
+	data := map[string]any{"title": "Nginx Configurations", "list": list}
+	templates.ExecuteTemplate(w, "nginxconfigs.html", data)
+}
+
+// return nginx config file content as JSON {path, content}
+func getNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	// security: only allow files in /etc/nginx/sites-enabled
+	if !strings.HasPrefix(path, "/etc/nginx/sites-enabled/") {
+		http.Error(w, "invalid path", http.StatusForbidden)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "failed to read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": path, "content": string(b)})
+}
+
+// save nginx config file
+func saveNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	// security: only allow files in /etc/nginx/sites-enabled
+	if !strings.HasPrefix(req.Path, "/etc/nginx/sites-enabled/") {
+		http.Error(w, "invalid path", http.StatusForbidden)
 		return
 	}
 	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {

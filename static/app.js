@@ -3,6 +3,25 @@ $(document).ready(function () {
         $('#dockerStats').DataTable({
             "order": [[2, "desc"]]
         });
+        // stop container handler
+        $(document).on('click', '.btn-stop', function (e) {
+            e.preventDefault();
+            var id = $(this).data('id');
+            if (!id) return;
+            if (!confirm('Stop container ' + id + '?')) return;
+            fetch('/docker/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            }).then(function (res) {
+                if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'stop failed'); });
+                return res.json();
+            }).then(function (data) {
+                location.reload();
+            }).catch(function (err) {
+                alert('Failed to stop container: ' + err.message);
+            });
+        });
     }
     // Dockerfiles editor handlers
     if (window.location.pathname === "/dockerfiles") {
@@ -47,6 +66,46 @@ $(document).ready(function () {
                 location.reload();
             }).catch(function (err) {
                 $('#yamlEditorAlert').show().text('Save failed: ' + err.message);
+            });
+        });
+    }
+    // Nginx configs editor handlers
+    if (window.location.pathname === "/nginxconfigs") {
+        // open modal and load file
+        $(document).on('click', '.btn-view-nginx', function (e) {
+            var path = $(this).data('path');
+            $('#nginxFilePath').text(path);
+            $('#nginxEditorAlert').hide().text('');
+            fetch('/nginxconfigs/file?path=' + encodeURIComponent(path)).then(function (res) {
+                if (!res.ok) throw new Error('failed to load file');
+                return res.json();
+            }).then(function (data) {
+                $('#nginxEditor').val(data.content);
+                var modal = new bootstrap.Modal(document.getElementById('nginxEditModal'));
+                modal.show();
+            }).catch(function (err) {
+                alert('Error loading file: ' + err.message);
+            });
+        });
+
+        // save handler
+        $('#nginxSaveBtn').on('click', function () {
+            var path = $('#nginxFilePath').text();
+            var content = $('#nginxEditor').val();
+            fetch('/nginxconfigs/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: path, content: content })
+            }).then(function (res) {
+                if (!res.ok) return res.text().then(function (t) { throw new Error(t || 'save failed'); });
+                return res.json();
+            }).then(function (data) {
+                var modalEl = document.getElementById('nginxEditModal');
+                var modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+                alert('File saved successfully!');
+            }).catch(function (err) {
+                $('#nginxEditorAlert').show().text('Save failed: ' + err.message);
             });
         });
     }
