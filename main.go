@@ -61,6 +61,9 @@ func main() {
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
 	mux.HandleFunc("/containerlogs", requireAuth(containerLogsHandler))
 	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
+	mux.HandleFunc("/drift", requireAuth(driftHandler))
+	mux.HandleFunc("/drift/restart", requireAuth(restartDriftHandler))
+	mux.HandleFunc("/authlog", requireAuth(authLogHandler))
 	mux.HandleFunc("/users", requireAuth(usersHandler))
 	mux.HandleFunc("/users/create", requireAuth(createUserHandler))
 	mux.HandleFunc("/login", loginHandler)
@@ -619,4 +622,121 @@ func saveNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// ---------------- auth log handler ----------------
+func authLogHandler(w http.ResponseWriter, r *http.Request) {
+	b, err := os.ReadFile("/var/log/auth.log")
+	var lines []string
+	if err == nil {
+		allLines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		// Reverse the lines so newest is first. Limit to last 100 lines.
+		start := 0
+		if len(allLines) > 100 {
+			start = len(allLines) - 100
+		}
+		for i := len(allLines) - 1; i >= start; i-- {
+			if ln := strings.TrimSpace(allLines[i]); ln != "" {
+				lines = append(lines, ln)
+			}
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("error reading log: %v", err))
+	}
+	data := map[string]any{"title": "Auth Log", "list": lines}
+	templates.ExecuteTemplate(w, "authlog.html", data)
+}
+
+// ---------------- drift handlers ----------------
+func driftHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT path FROM docker_files")
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type DriftItem struct {
+		Path    string
+		Service string
+	}
+	var drifts []DriftItem
+
+	for rows.Next() {
+		var path string
+		rows.Scan(&path)
+
+		// get services (only stdout to avoid warnings in stderr)
+		out, err := exec.Command("docker", "compose", "-f", path, "config", "--services").Output()
+		if err != nil {
+			continue // skip on error
+		}
+		services := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+		// get ps -a
+		out, err = exec.Command("docker", "compose", "-f", path, "ps", "-a", "--format", "json").Output()
+		if err != nil {
+			continue
+		}
+
+		runningServices := make(map[string]bool)
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, ln := range lines {
+			if strings.TrimSpace(ln) == "" {
+				continue
+			}
+			var cInfo struct {
+				Service string `json:"Service"`
+				State   string `json:"State"`
+			}
+			if err := json.Unmarshal([]byte(ln), &cInfo); err == nil {
+				if cInfo.State == "running" {
+					runningServices[cInfo.Service] = true
+				}
+			}
+		}
+
+		for _, s := range services {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !runningServices[s] {
+				drifts = append(drifts, DriftItem{Path: path, Service: s})
+			}
+		}
+	}
+
+	data := map[string]any{"title": "Drift", "list": drifts}
+	templates.ExecuteTemplate(w, "drift.html", data)
+}
+
+func restartDriftHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.FormValue("path")
+	service := r.FormValue("service")
+	if path == "" || service == "" {
+		http.Error(w, "path and service required", http.StatusBadRequest)
+		return
+	}
+
+	// verify path exists in our db to prevent arbitrary path execution
+	var count int
+	_ = db.QueryRow("SELECT COUNT(1) FROM docker_files WHERE path = ?", path).Scan(&count)
+	if count == 0 {
+		http.Error(w, "invalid path", http.StatusForbidden)
+		return
+	}
+
+	out, err := exec.Command("docker", "compose", "-f", path, "up", "-d", service).CombinedOutput()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, fmt.Sprintf("error starting service: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
 }
