@@ -135,4 +135,20 @@ $(document).ready(function () {
             });
         });
     }
+
+    // Auth Log page
+    if (window.location.pathname.startsWith("/authlog")) {
+        if ($('#authLogTable').length) {
+            var authTable = $('#authLogTable').DataTable({
+                "order": [],
+                "pageLength": 100,
+                "dom": "<'row'<'col-sm-12 col-md-6'l><'col-sm-12 col-md-6'>>" +
+                       "<'row'<'col-sm-12'tr>>" +
+                       "<'row'<'col-sm-12 col-md-5'i><'col-sm-12 col-md-7'p>>"
+            });
+            $('#customFilter').on('keyup', function () {
+                authTable.search(this.value).draw();
+            });
+        }
+    }
 });
