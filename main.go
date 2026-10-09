@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -244,8 +245,32 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+func execCmdCombinedOutput(name string, args ...string) ([]byte, error) {
+	timeout := 30 * time.Second
+	if t := os.Getenv("EXEC_TIMEOUT_SEC"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			timeout = time.Duration(v) * time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func execCmdOutput(name string, args ...string) ([]byte, error) {
+	timeout := 30 * time.Second
+	if t := os.Getenv("EXEC_TIMEOUT_SEC"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			timeout = time.Duration(v) * time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
 func dashboardHandler(w http.ResponseWriter, r *http.Request) {
-	out, err := exec.Command("df", "-H").CombinedOutput()
+	out, err := execCmdCombinedOutput("df", "-H")
 	df := string(out)
 	if err != nil {
 		df = fmt.Sprintf("error running df: %v\n%s", err, df)
@@ -255,7 +280,7 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func topnHandler(w http.ResponseWriter, r *http.Request) {
-	out, err := exec.Command("top", "-b", "-n", "1").CombinedOutput()
+	out, err := execCmdCombinedOutput("top", "-b", "-n", "1")
 	top := string(out)
 	if err != nil {
 		top = fmt.Sprintf("error running top: %v\n%s", err, top)
@@ -280,7 +305,7 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var stats []DS
 	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
-	out, err := exec.Command("docker", "stats", "--no-stream", "--format", format).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "stats", "--no-stream", "--format", format)
 	data := map[string]any{"title": "Docker Stats", "Command": "docker stats --no-stream --format '" + format + "'", "Output": string(out), "Error": nil, "list": stats}
 	if err != nil {
 		fmt.Println("error:", err)
@@ -324,7 +349,7 @@ func inspectAPIHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	out, err := exec.Command("docker", "inspect", id).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "inspect", id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, fmt.Sprintf("error running docker inspect: %v\n%s", err, string(out)), http.StatusInternalServerError)
@@ -341,7 +366,7 @@ func containerLogsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing container id", http.StatusBadRequest)
 		return
 	}
-	out, err := exec.Command("docker", "logs", "--tail", "200", id).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "logs", "--tail", "200", id)
 	data := map[string]any{"title": "Container Logs", "Command": "docker logs --tail 200 " + id, "Output": string(out)}
 	if err != nil {
 		data["Output"] = fmt.Sprintf("error running docker logs: %v\n%s", err, string(out))
@@ -368,7 +393,7 @@ func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		id = req.ID
 	}
-	out, err := exec.Command("docker", "stop", id).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "stop", id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, fmt.Sprintf("error stopping container: %v\n%s", err, string(out)), http.StatusInternalServerError)
@@ -667,14 +692,14 @@ func driftHandler(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&path)
 
 		// get services (only stdout to avoid warnings in stderr)
-		out, err := exec.Command("docker", "compose", "-f", path, "config", "--services").Output()
+		out, err := execCmdOutput("docker", "compose", "-f", path, "config", "--services")
 		if err != nil {
 			continue // skip on error
 		}
 		services := strings.Split(strings.TrimSpace(string(out)), "\n")
 
 		// get ps -a
-		out, err = exec.Command("docker", "compose", "-f", path, "ps", "-a", "--format", "json").Output()
+		out, err = execCmdOutput("docker", "compose", "-f", path, "ps", "-a", "--format", "json")
 		if err != nil {
 			continue
 		}
@@ -731,7 +756,7 @@ func restartDriftHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := exec.Command("docker", "compose", "-f", path, "up", "-d", service).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "compose", "-f", path, "up", "-d", service)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, fmt.Sprintf("error starting service: %v\n%s", err, string(out)), http.StatusInternalServerError)
