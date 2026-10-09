@@ -1,0 +1,57 @@
+{{template "header_insession" .}}
+<div class="row">
+    <div class="col-md-12">
+        <h3>Docker Compose Drift</h3>
+        <p>Showing containers defined in tracked Docker Compose files that are not currently running.</p>
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Compose File Path</th>
+                    <th>Service Name</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .list}}
+                <tr>
+                    <td>{{.Path}}</td>
+                    <td>{{.Service}}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary restart-btn" data-path="{{.Path}}" data-service="{{.Service}}">Restart Container</button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr>
+                    <td colspan="3">No drifted containers found.</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    $('.restart-btn').click(function() {
+        var btn = $(this);
+        var path = btn.data('path');
+        var service = btn.data('service');
+        
+        btn.prop('disabled', true).text('Restarting...');
+
+        $.post('/drift/restart', {path: path, service: service}, function(res) {
+            if (res.ok) {
+                alert('Restarted successfully:\n' + res.output);
+                location.reload();
+            } else {
+                alert('Error starting container.');
+                btn.prop('disabled', false).text('Restart Container');
+            }
+        }).fail(function(err) {
+            alert('Failed to start container: ' + err.responseText);
+            btn.prop('disabled', false).text('Restart Container');
+        });
+    });
+});
+</script>
+{{template "footer_insession" .}}

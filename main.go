@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -47,15 +48,23 @@ func main() {
 	mux.HandleFunc("/dashboard", requireAuth(dashboardHandler))
 	mux.HandleFunc("/topn", requireAuth(topnHandler))
 	mux.HandleFunc("/dockerstats", requireAuth(dockerstatsHandler))
+	mux.HandleFunc("/docker/stop", requireAuth(stopContainerHandler))
 	mux.HandleFunc("/dockerfiles", requireAuth(dockerfilesHandler))
 	mux.HandleFunc("/dockerfiles/add", requireAuth(addDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/delete", requireAuth(deleteDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/file", requireAuth(getDockerfileHandler))
 	mux.HandleFunc("/dockerfiles/save", requireAuth(saveDockerfileHandler))
+	// nginx configs
+	mux.HandleFunc("/nginxconfigs", requireAuth(nginxConfigsHandler))
+	mux.HandleFunc("/nginxconfigs/file", requireAuth(getNginxConfigHandler))
+	mux.HandleFunc("/nginxconfigs/save", requireAuth(saveNginxConfigHandler))
 	// container inspect page and API
 	mux.HandleFunc("/container", requireAuth(containerPageHandler))
 	mux.HandleFunc("/containerlogs", requireAuth(containerLogsHandler))
 	mux.HandleFunc("/api/inspect", requireAuth(inspectAPIHandler))
+	mux.HandleFunc("/drift", requireAuth(driftHandler))
+	mux.HandleFunc("/drift/restart", requireAuth(restartDriftHandler))
+	mux.HandleFunc("/authlog", requireAuth(authLogHandler))
 	mux.HandleFunc("/users", requireAuth(usersHandler))
 	mux.HandleFunc("/users/create", requireAuth(createUserHandler))
 	mux.HandleFunc("/login", loginHandler)
@@ -236,8 +245,32 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+func execCmdCombinedOutput(name string, args ...string) ([]byte, error) {
+	timeout := 30 * time.Second
+	if t := os.Getenv("EXEC_TIMEOUT_SEC"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			timeout = time.Duration(v) * time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func execCmdOutput(name string, args ...string) ([]byte, error) {
+	timeout := 30 * time.Second
+	if t := os.Getenv("EXEC_TIMEOUT_SEC"); t != "" {
+		if v, err := strconv.Atoi(t); err == nil {
+			timeout = time.Duration(v) * time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
+
 func dashboardHandler(w http.ResponseWriter, r *http.Request) {
-	out, err := exec.Command("df", "-H").CombinedOutput()
+	out, err := execCmdCombinedOutput("df", "-H")
 	df := string(out)
 	if err != nil {
 		df = fmt.Sprintf("error running df: %v\n%s", err, df)
@@ -247,7 +280,7 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func topnHandler(w http.ResponseWriter, r *http.Request) {
-	out, err := exec.Command("top", "-b", "-n", "1").CombinedOutput()
+	out, err := execCmdCombinedOutput("top", "-b", "-n", "1")
 	top := string(out)
 	if err != nil {
 		top = fmt.Sprintf("error running top: %v\n%s", err, top)
@@ -272,7 +305,7 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var stats []DS
 	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
-	out, err := exec.Command("docker", "stats", "--no-stream", "--format", format).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "stats", "--no-stream", "--format", format)
 	data := map[string]any{"title": "Docker Stats", "Command": "docker stats --no-stream --format '" + format + "'", "Output": string(out), "Error": nil, "list": stats}
 	if err != nil {
 		fmt.Println("error:", err)
@@ -316,7 +349,7 @@ func inspectAPIHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	out, err := exec.Command("docker", "inspect", id).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "inspect", id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, fmt.Sprintf("error running docker inspect: %v\n%s", err, string(out)), http.StatusInternalServerError)
@@ -333,12 +366,41 @@ func containerLogsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing container id", http.StatusBadRequest)
 		return
 	}
-	out, err := exec.Command("docker", "logs", "--tail", "200", id).CombinedOutput()
+	out, err := execCmdCombinedOutput("docker", "logs", "--tail", "200", id)
 	data := map[string]any{"title": "Container Logs", "Command": "docker logs --tail 200 " + id, "Output": string(out)}
 	if err != nil {
 		data["Output"] = fmt.Sprintf("error running docker logs: %v\n%s", err, string(out))
 	}
 	templates.ExecuteTemplate(w, "output.html", data)
+}
+
+// stop a running container by id
+func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var id string
+	// prefer form value
+	id = r.FormValue("id")
+	if id == "" {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		id = req.ID
+	}
+	out, err := execCmdCombinedOutput("docker", "stop", id)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, fmt.Sprintf("error stopping container: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
@@ -508,4 +570,198 @@ func saveDockerfileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// ---------------- nginx configs handlers ----------------
+func nginxConfigsHandler(w http.ResponseWriter, r *http.Request) {
+	dir := "/etc/nginx/sites-enabled"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		http.Error(w, "failed to read nginx directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type NginxFile struct {
+		Name string
+		Path string
+	}
+	var list []NginxFile
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			list = append(list, NginxFile{
+				Name: entry.Name(),
+				Path: dir + "/" + entry.Name(),
+			})
+		}
+	}
+	data := map[string]any{"title": "Nginx Configurations", "list": list}
+	templates.ExecuteTemplate(w, "nginxconfigs.html", data)
+}
+
+// return nginx config file content as JSON {path, content}
+func getNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	// security: only allow files in /etc/nginx/sites-enabled
+	if !strings.HasPrefix(path, "/etc/nginx/sites-enabled/") {
+		http.Error(w, "invalid path", http.StatusForbidden)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "failed to read file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"path": path, "content": string(b)})
+}
+
+// save nginx config file
+func saveNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "path required", http.StatusBadRequest)
+		return
+	}
+	// security: only allow files in /etc/nginx/sites-enabled
+	if !strings.HasPrefix(req.Path, "/etc/nginx/sites-enabled/") {
+		http.Error(w, "invalid path", http.StatusForbidden)
+		return
+	}
+	if err := os.WriteFile(req.Path, []byte(req.Content), 0644); err != nil {
+		http.Error(w, "failed to save file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// ---------------- auth log handler ----------------
+func authLogHandler(w http.ResponseWriter, r *http.Request) {
+	b, err := os.ReadFile("/var/log/auth.log")
+	var lines []string
+	if err == nil {
+		allLines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		// Reverse the lines so newest is first. Limit to last 100 lines.
+		start := 0
+		if len(allLines) > 100 {
+			start = len(allLines) - 100
+		}
+		for i := len(allLines) - 1; i >= start; i-- {
+			if ln := strings.TrimSpace(allLines[i]); ln != "" {
+				lines = append(lines, ln)
+			}
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("error reading log: %v", err))
+	}
+	data := map[string]any{"title": "Auth Log", "list": lines}
+	templates.ExecuteTemplate(w, "authlog.html", data)
+}
+
+// ---------------- drift handlers ----------------
+func driftHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.Query("SELECT path FROM docker_files")
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type DriftItem struct {
+		Path    string
+		Service string
+	}
+	var drifts []DriftItem
+
+	for rows.Next() {
+		var path string
+		rows.Scan(&path)
+
+		// get services (only stdout to avoid warnings in stderr)
+		out, err := execCmdOutput("docker", "compose", "-f", path, "config", "--services")
+		if err != nil {
+			continue // skip on error
+		}
+		services := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+		// get ps -a
+		out, err = execCmdOutput("docker", "compose", "-f", path, "ps", "-a", "--format", "json")
+		if err != nil {
+			continue
+		}
+
+		runningServices := make(map[string]bool)
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, ln := range lines {
+			if strings.TrimSpace(ln) == "" {
+				continue
+			}
+			var cInfo struct {
+				Service string `json:"Service"`
+				State   string `json:"State"`
+			}
+			if err := json.Unmarshal([]byte(ln), &cInfo); err == nil {
+				if cInfo.State == "running" {
+					runningServices[cInfo.Service] = true
+				}
+			}
+		}
+
+		for _, s := range services {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !runningServices[s] {
+				drifts = append(drifts, DriftItem{Path: path, Service: s})
+			}
+		}
+	}
+
+	data := map[string]any{"title": "Drift", "list": drifts}
+	templates.ExecuteTemplate(w, "drift.html", data)
+}
+
+func restartDriftHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.FormValue("path")
+	service := r.FormValue("service")
+	if path == "" || service == "" {
+		http.Error(w, "path and service required", http.StatusBadRequest)
+		return
+	}
+
+	// verify path exists in our db to prevent arbitrary path execution
+	var count int
+	_ = db.QueryRow("SELECT COUNT(1) FROM docker_files WHERE path = ?", path).Scan(&count)
+	if count == 0 {
+		http.Error(w, "invalid path", http.StatusForbidden)
+		return
+	}
+
+	out, err := execCmdCombinedOutput("docker", "compose", "-f", path, "up", "-d", service)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, fmt.Sprintf("error starting service: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
 }
