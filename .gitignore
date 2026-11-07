@@ -38,3 +38,7 @@ coverage.out
 
 # Temporary files
 /tmp/
+
+# Documentation & planning
+GEMINI.md
+plans/

@@ -22,10 +22,14 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 	yaml "gopkg.in/yaml.v3"
+
+	"dpanel/internal/collector"
+	dbPkg "dpanel/internal/db"
 )
 
 var db *sql.DB
 var templates *template.Template
+var collectorClient *collector.Client
 
 func main() {
 	var err error
@@ -40,6 +44,7 @@ func main() {
 	if err := initDB(); err != nil {
 		log.Fatal(err)
 	}
+	initCollector()
 
 	templates = template.Must(template.ParseGlob("templates/*.html"))
 
@@ -97,21 +102,34 @@ func main() {
 }
 
 func initDB() error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			password TEXT NOT NULL,
-			created_at DATETIME
-		);
+	schemaPath := os.Getenv("SCHEMA_PATH")
+	if schemaPath == "" {
+		schemaPath = "schema/schema.sql"
+	}
+	return dbPkg.EnsureSchema(db, schemaPath)
+}
 
-		CREATE TABLE IF NOT EXISTS docker_files (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			path TEXT NOT NULL UNIQUE,
-			created_at DATETIME
-		);
-	`)
-	return err
+func initCollector() {
+	sockPath := os.Getenv("COLLECTOR_SOCK")
+	if sockPath == "" {
+		sockPath = "/tmp/dpanel-collector.sock"
+	}
+	token := os.Getenv("COLLECTOR_TOKEN")
+	if token == "" {
+		tokenFile := os.Getenv("COLLECTOR_TOKEN_FILE")
+		if tokenFile == "" {
+			tokenFile = "/tmp/dpanel-collector.token"
+		}
+		if b, err := os.ReadFile(tokenFile); err == nil {
+			token = strings.TrimSpace(string(b))
+		}
+	}
+	collectorClient = collector.NewClient(sockPath, token)
+	if timeoutStr := os.Getenv("EXEC_TIMEOUT_SEC"); timeoutStr != "" {
+		if v, err := strconv.Atoi(timeoutStr); err == nil {
+			collectorClient.SetTimeout(time.Duration(v) * time.Second)
+		}
+	}
 }
 
 // ---------------- session helper (simple HMAC-signed cookie) ----------------
@@ -269,9 +287,143 @@ func execCmdOutput(name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).Output()
 }
 
-func dashboardHandler(w http.ResponseWriter, r *http.Request) {
+func runDF(ctx context.Context) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.DF(ctx)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector DF failed: %v, using direct execution", err)
+	}
 	out, err := execCmdCombinedOutput("df", "-H")
-	df := string(out)
+	return string(out), err
+}
+
+func runTop(ctx context.Context) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.Top(ctx)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector Top failed: %v, using direct execution", err)
+	}
+	out, err := execCmdCombinedOutput("top", "-b", "-n", "1")
+	return string(out), err
+}
+
+func runDockerStats(ctx context.Context) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.DockerStats(ctx)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector DockerStats failed: %v, using direct execution", err)
+	}
+	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
+	out, err := execCmdCombinedOutput("docker", "stats", "--no-stream", "--format", format)
+	return string(out), err
+}
+
+func runDockerInspect(ctx context.Context, id string) ([]byte, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.DockerInspect(ctx, id)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector DockerInspect failed: %v, using direct execution", err)
+	}
+	return execCmdCombinedOutput("docker", "inspect", id)
+}
+
+func runDockerLogs(ctx context.Context, id string, tail int) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.DockerLogs(ctx, id, tail)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector DockerLogs failed: %v, using direct execution", err)
+	}
+	out, err := execCmdCombinedOutput("docker", "logs", "--tail", strconv.Itoa(tail), id)
+	return string(out), err
+}
+
+func runDockerStop(ctx context.Context, id string) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.DockerStop(ctx, id)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector DockerStop failed: %v, using direct execution", err)
+	}
+	out, err := execCmdCombinedOutput("docker", "stop", id)
+	return string(out), err
+}
+
+func runComposeServices(ctx context.Context, path string) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.ComposeServices(ctx, path)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector ComposeServices failed: %v, using direct execution", err)
+	}
+	out, err := execCmdOutput("docker", "compose", "-f", path, "config", "--services")
+	return string(out), err
+}
+
+func runComposePS(ctx context.Context, path string) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.ComposePS(ctx, path)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector ComposePS failed: %v, using direct execution", err)
+	}
+	out, err := execCmdOutput("docker", "compose", "-f", path, "ps", "-a", "--format", "json")
+	return string(out), err
+}
+
+func runComposeUp(ctx context.Context, path string, service string) (string, error) {
+	if collectorClient != nil {
+		out, err := collectorClient.ComposeUp(ctx, path, service)
+		if err == nil {
+			return out, nil
+		}
+		log.Printf("collector ComposeUp failed: %v, using direct execution", err)
+	}
+	out, err := execCmdCombinedOutput("docker", "compose", "-f", path, "up", "-d", service)
+	return string(out), err
+}
+
+func runAuthLog(ctx context.Context, lines int) ([]string, error) {
+	if collectorClient != nil {
+		entries, err := collectorClient.AuthLog(ctx, lines)
+		if err == nil {
+			return entries, nil
+		}
+		log.Printf("collector AuthLog failed: %v, using direct execution", err)
+	}
+	b, err := os.ReadFile("/var/log/auth.log")
+	if err != nil {
+		return nil, err
+	}
+	allLines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	start := 0
+	if len(allLines) > lines {
+		start = len(allLines) - lines
+	}
+	var result []string
+	for i := len(allLines) - 1; i >= start; i-- {
+		if ln := strings.TrimSpace(allLines[i]); ln != "" {
+			result = append(result, ln)
+		}
+	}
+	return result, nil
+}
+
+func dashboardHandler(w http.ResponseWriter, r *http.Request) {
+	out, err := runDF(r.Context())
+	df := out
 	if err != nil {
 		df = fmt.Sprintf("error running df: %v\n%s", err, df)
 	}
@@ -280,8 +432,8 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func topnHandler(w http.ResponseWriter, r *http.Request) {
-	out, err := execCmdCombinedOutput("top", "-b", "-n", "1")
-	top := string(out)
+	out, err := runTop(r.Context())
+	top := out
 	if err != nil {
 		top = fmt.Sprintf("error running top: %v\n%s", err, top)
 	}
@@ -305,15 +457,15 @@ func dockerstatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	var stats []DS
 	format := "{{.Container}}|{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}|{{.BlockIO}}|{{.PIDs}}"
-	out, err := execCmdCombinedOutput("docker", "stats", "--no-stream", "--format", format)
-	data := map[string]any{"title": "Docker Stats", "Command": "docker stats --no-stream --format '" + format + "'", "Output": string(out), "Error": nil, "list": stats}
+	out, err := runDockerStats(r.Context())
+	data := map[string]any{"title": "Docker Stats", "Command": "docker stats --no-stream --format '" + format + "'", "Output": out, "Error": nil, "list": stats}
 	if err != nil {
 		fmt.Println("error:", err)
-		data["Error"] = fmt.Sprintf("error running docker stats: %v\n%s", err, string(out))
+		data["Error"] = fmt.Sprintf("error running docker stats: %v\n%s", err, out)
 		templates.ExecuteTemplate(w, "dockerstats.html", data)
 		return
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 	for _, ln := range lines {
 		if strings.TrimSpace(ln) == "" {
 			continue
@@ -349,7 +501,7 @@ func inspectAPIHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
 	}
-	out, err := execCmdCombinedOutput("docker", "inspect", id)
+	out, err := runDockerInspect(r.Context(), id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, fmt.Sprintf("error running docker inspect: %v\n%s", err, string(out)), http.StatusInternalServerError)
@@ -366,10 +518,10 @@ func containerLogsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing container id", http.StatusBadRequest)
 		return
 	}
-	out, err := execCmdCombinedOutput("docker", "logs", "--tail", "200", id)
-	data := map[string]any{"title": "Container Logs", "Command": "docker logs --tail 200 " + id, "Output": string(out)}
+	out, err := runDockerLogs(r.Context(), id, 200)
+	data := map[string]any{"title": "Container Logs", "Command": "docker logs --tail 200 " + id, "Output": out}
 	if err != nil {
-		data["Output"] = fmt.Sprintf("error running docker logs: %v\n%s", err, string(out))
+		data["Output"] = fmt.Sprintf("error running docker logs: %v\n%s", err, out)
 	}
 	templates.ExecuteTemplate(w, "output.html", data)
 }
@@ -393,14 +545,14 @@ func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		id = req.ID
 	}
-	out, err := execCmdCombinedOutput("docker", "stop", id)
+	out, err := runDockerStop(r.Context(), id)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, fmt.Sprintf("error stopping container: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("error stopping container: %v\n%s", err, out), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": out})
 }
 
 func usersHandler(w http.ResponseWriter, r *http.Request) {
@@ -651,22 +803,9 @@ func saveNginxConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 // ---------------- auth log handler ----------------
 func authLogHandler(w http.ResponseWriter, r *http.Request) {
-	b, err := os.ReadFile("/var/log/auth.log")
-	var lines []string
-	if err == nil {
-		allLines := strings.Split(strings.TrimSpace(string(b)), "\n")
-		// Reverse the lines so newest is first. Limit to last 100 lines.
-		start := 0
-		if len(allLines) > 100 {
-			start = len(allLines) - 100
-		}
-		for i := len(allLines) - 1; i >= start; i-- {
-			if ln := strings.TrimSpace(allLines[i]); ln != "" {
-				lines = append(lines, ln)
-			}
-		}
-	} else {
-		lines = append(lines, fmt.Sprintf("error reading log: %v", err))
+	lines, err := runAuthLog(r.Context(), 100)
+	if err != nil {
+		lines = []string{fmt.Sprintf("error reading log: %v", err)}
 	}
 	data := map[string]any{"title": "Auth Log", "list": lines}
 	templates.ExecuteTemplate(w, "authlog.html", data)
@@ -692,20 +831,20 @@ func driftHandler(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&path)
 
 		// get services (only stdout to avoid warnings in stderr)
-		out, err := execCmdOutput("docker", "compose", "-f", path, "config", "--services")
+		out, err := runComposeServices(r.Context(), path)
 		if err != nil {
 			continue // skip on error
 		}
-		services := strings.Split(strings.TrimSpace(string(out)), "\n")
+		services := strings.Split(strings.TrimSpace(out), "\n")
 
 		// get ps -a
-		out, err = execCmdOutput("docker", "compose", "-f", path, "ps", "-a", "--format", "json")
+		out, err = runComposePS(r.Context(), path)
 		if err != nil {
 			continue
 		}
 
 		runningServices := make(map[string]bool)
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		lines := strings.Split(strings.TrimSpace(out), "\n")
 		for _, ln := range lines {
 			if strings.TrimSpace(ln) == "" {
 				continue
@@ -756,12 +895,12 @@ func restartDriftHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := execCmdCombinedOutput("docker", "compose", "-f", path, "up", "-d", service)
+	out, err := runComposeUp(r.Context(), path, service)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, fmt.Sprintf("error starting service: %v\n%s", err, string(out)), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("error starting service: %v\n%s", err, out), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": string(out)})
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "output": out})
 }
